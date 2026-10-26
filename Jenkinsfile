@@ -15,10 +15,11 @@ pipeline {
         stage('Detect branch') {
             steps {
                 script {
-                    env.DEPLOY_BRANCH = sh(script: 'git rev-parse --abbrev-ref HEAD', returnStdout: true).trim()
-                    if (env.DEPLOY_BRANCH == 'HEAD') {
-                        error('Detached HEAD. Set the Branch Specifier to a real branch.')
+                    def branch = (env.GIT_BRANCH ?: '').replaceFirst(/^origin\//, '')
+                    if (!branch || branch == 'HEAD') {
+                        error('Could not detect branch. Check the Branch Specifier in the job config.')
                     }
+                    env.DEPLOY_BRANCH = branch
                     echo "Deploying branch: ${env.DEPLOY_BRANCH}"
                 }
             }
