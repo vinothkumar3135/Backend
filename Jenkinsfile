@@ -1,42 +1,62 @@
 pipeline {
     agent any
 
+    options {
+        disableConcurrentBuilds()
+        timeout(time: 30, unit: 'MINUTES')
+    }
+
     environment {
-        IMAGE = "practice-backend"
-        TAG   = "${env.BUILD_NUMBER}"
+        EC2_HOST = '65.0.32.30'
+        EC2_USER = 'ubuntu'
     }
 
     stages {
-        stage('Checkout') {
-            steps { checkout scm }
-        }
-        stage('Install & Test') {
+        stage('Detect branch') {
             steps {
-                sh '''
-                    python3 -m venv venv
-                    . venv/bin/activate
-                    pip install -r requirements.txt
-                    pytest -q
-                '''
+                script {
+                    env.DEPLOY_BRANCH = sh(script: 'git rev-parse --abbrev-ref HEAD', returnStdout: true).trim()
+                    if (env.DEPLOY_BRANCH == 'HEAD') {
+                        error('Detached HEAD. Set the Branch Specifier to a real branch.')
+                    }
+                    echo "Deploying branch: ${env.DEPLOY_BRANCH}"
+                }
             }
         }
-        stage('Build Image') {
-            steps { sh 'docker build -t $IMAGE:$TAG -t $IMAGE:latest .' }
-        }
-        stage('Deploy') {
+
+        stage('Deploy to EC2') {
             steps {
-                sh '''
-                    docker rm -f $IMAGE || true
-                    docker run -d --name $IMAGE -p 8000:8000 --env-file .env $IMAGE:latest
-                '''
+                withCredentials([file(credentialsId: 'Infoez-Backend-Env', variable: 'ENV_FILE')]) {
+                    sshagent(['Infoez-Pem-Key']) {
+                        sh '''
+ssh -o StrictHostKeyChecking=no $EC2_USER@$EC2_HOST "rm -f /tmp/infoez-backend.env"
+scp -o StrictHostKeyChecking=no "$ENV_FILE" $EC2_USER@$EC2_HOST:/tmp/infoez-backend.env
+ssh -A -o StrictHostKeyChecking=no $EC2_USER@$EC2_HOST "bash -s -- '$DEPLOY_BRANCH'" <<'REMOTE'
+set -euo pipefail
+BRANCH="$1"
+APP_DIR=/home/ubuntu/Backend
+
+rm -rf "$APP_DIR"
+git clone -q -b "$BRANCH" git@github.com:Infoez-kiaq/Backend.git "$APP_DIR"
+cp /tmp/infoez-backend.env "$APP_DIR/.env"
+chmod 600 "$APP_DIR/.env"
+rm -f /tmp/infoez-backend.env
+
+cd "$APP_DIR"
+docker build -t inf-backend .
+docker rm -f infoez >/dev/null 2>&1 || true
+docker run -d --restart unless-stopped -p 8000:8000 --env-file .env --network my-app-network --name infoez inf-backend
+REMOTE
+'''
+                    }
+                }
             }
-        }
-        stage('Smoke Test') {
-            steps { sh 'sleep 5 && curl -f http://localhost:8000/health' }
         }
     }
 
     post {
-        failure { echo 'Pipeline failed - check the stage logs above.' }
+        always {
+            echo "Finished: ${currentBuild.currentResult}"
+        }
     }
 }
