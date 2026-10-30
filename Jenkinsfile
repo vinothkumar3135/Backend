@@ -3,7 +3,7 @@ pipeline {
 
     environment {
         IMAGE = "practice-backend"
-        TAG   = "${env.BUILD_NUMBER}"
+        TAG   = "${env.BUILD_NUMBEr}"
     }
 
     stages {
